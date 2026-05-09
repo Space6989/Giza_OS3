@@ -1,5 +1,5 @@
 # ==============================================================================
-# GIZA OS v15.3 - THE SPECTRAL SNIPER
+# GIZA OS v15.5 - THE SPECTRAL SNIPER
 # ==============================================================================
 # Strategia: GIZA LOCK // Trójkąt Trinity (Egipt-Cypr-Izrael)
 # Sensory: Sejsmika IRIS, NASA TEC, Astro-Sync Regulus, Syzygy Gravity Master
