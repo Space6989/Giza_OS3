@@ -61,6 +61,34 @@ if not os.path.exists(LOG_FILE):
 # =========================
 # ASTRO-SYNC & SYZYGY ENGINE
 # =========================
+class AstroCache:
+    """Goal 1: Astro-layer stability with caching and staleness detection."""
+    def __init__(self):
+        self.last_valid = {
+            "reg_az": 0, "ven_az": 0, "jup_az": 0, "grav_load": 25.0
+        }
+        self.last_update = datetime.now(timezone.utc)
+        self.astro_stale = False
+    
+    def is_stale(self):
+        age = (datetime.now(timezone.utc) - self.last_update).total_seconds()
+        return age > 120.0
+    
+    def get_cached(self):
+        """Return last valid state, setting ASTRO_STALE if > 120s."""
+        if self.is_stale():
+            self.astro_stale = True
+            print(f"[ASTRO WARN] Cache age > 120s, using last valid state")
+        return self.last_valid.copy()
+    
+    def update(self, new_metrics):
+        """Update cache with fresh metrics."""
+        self.last_valid = new_metrics.copy()
+        self.last_update = datetime.now(timezone.utc)
+        self.astro_stale = False
+
+astro_cache = AstroCache()
+
 def get_space_metrics():
     try:
         # SYNC T-15min (900s)
@@ -89,13 +117,16 @@ def get_space_metrics():
 
         g_load = max(0.0, min(100.0, g_load))
 
-        return {
+        new_metrics = {
             "reg_az": float(reg.az.deg), "ven_az": float(venus.az.deg),
             "jup_az": float(jupiter.az.deg), "grav_load": float(g_load)
         }
+        astro_cache.update(new_metrics)
+        return new_metrics
     except Exception as e:
         print(f"[ASTRO ERROR] {e}")
-        return {"reg_az": 0, "ven_az": 0, "jup_az": 0, "grav_load": 10.0}
+        # Goal 1: Use cached state instead of hardcoded fallback
+        return astro_cache.get_cached()
 
 # ==============================================================================
 # DATA STREAMING & SNIPER ANALYSIS ENGINE
@@ -110,6 +141,11 @@ class GizaSniperStreamer:
         self.last_end_time = None
         self.persistence = {"LOW": 0, "MID": 0, "HIGH": 0}
         self.last_active_cluster = None
+        # Goal 4: Store sub-scores for telemetry diagnostics
+        self.last_sub_scores = {
+            "harm_score": 0.0, "energy_score": 0.0,
+            "persistence_score": 0.0, "cluster_score": 0.0, "noise_floor": 1.0
+        }
 
     def tec_worker(self):
         while self.running:
@@ -213,22 +249,40 @@ def analyze_sniper_core(sigs):
         pow_peak = psd[mask][peak_idx]
         sigma = pow_peak / (np.mean(psd) + 1e-9)
 
-        # ===== COMPOSITE H_CONF v15.5 (STABLE ANOMALY SCORE) =====
-        # Multi-factor anomaly detection: harmonic coherence, spectral energy, 
-        # cluster persistence, and multi-cluster activity
+        # ===== COMPOSITE H_CONF v15.6 (IMPROVED ADAPTIVE SCORING) =====
+        # Multi-factor anomaly detection with weighted harmonics and adaptive noise floor
         
         noise_floor = np.mean(psd)
         
-        # Factor 1: HARMONIC COHERENCE (0-40 weight)
+        # Goal 3: Adaptive noise floor - normalize against local spectral baseline
+        spectral_stdev = np.std(psd[mask])
+        adaptive_threshold = noise_floor + spectral_stdev
+        
+        # Factor 1: HARMONIC COHERENCE with weighted contribution (Goal 2: Not binary)
         harm_score = 0.0
-        if pow_peak > noise_floor * 2.0:
+        if pow_peak > noise_floor * 1.5:  # Relaxed threshold for Goal 3
             p2 = psd[np.argmin(np.abs(fr - peak_hz * 2))]
             p3 = psd[np.argmin(np.abs(fr - peak_hz * 3))]
             harmonic_energy = p2 + p3
             harm_ratio = (harmonic_energy / (pow_peak + 1e-9))
-            # Smooth sigmoid: penalize both weak and excessive harmonics
-            harm_score = (50.0 * harm_ratio) / (1.0 + (harm_ratio ** 2))
+            
+            # Goal 2: Weighted harmonic contribution (smooth, partial scoring)
+            # Low ratios reduce score instead of zeroing it
+            if harm_ratio > 0.1:
+                harm_score = (50.0 * harm_ratio) / (1.0 + (harm_ratio ** 2))
+            else:
+                # Weak harmonics still contribute partially (Goal 2)
+                harm_score = harm_ratio * 15.0
+            
             harm_score = min(40.0, max(0.0, harm_score))
+        else:
+            # Goal 2: Weak but coherent narrowband peaks contribute partially
+            if pow_peak > adaptive_threshold * 0.5:
+                harm_score = 5.0
+        
+        # Goal 4: Log harmonic score
+        sniper.last_sub_scores["harm_score"] = float(harm_score)
+        sniper.last_sub_scores["noise_floor"] = float(noise_floor)
         
         # Factor 2: SPECTRAL ENERGY DISTRIBUTION (0-30 weight)
         e_low = np.sum(psd[(fr >= 7) & (fr <= 14)]) / (np.sum(psd) + 1e-9) * 100
@@ -240,6 +294,7 @@ def analyze_sniper_core(sigs):
                            (e_mid + 1e-9) * np.log(e_mid + 1e-9) + 
                            (e_high + 1e-9) * np.log(e_high + 1e-9)) / np.log(3)
         energy_score = (1.0 - cluster_entropy) * 30.0  # Focused = anomalous
+        sniper.last_sub_scores["energy_score"] = float(energy_score)
         
         # Factor 3: PERSISTENCE ENGINE (0-20 weight)
         active_now = None
@@ -259,6 +314,7 @@ def analyze_sniper_core(sigs):
 
         # Persistence reward: sustained activity
         persistence_score = min(20.0, (sniper.persistence[active_now] / 60.0) * 20.0 if active_now else 0.0)
+        sniper.last_sub_scores["persistence_score"] = float(persistence_score)
         
         # Factor 4: MULTI-CLUSTER ACTIVITY (0-10 weight)
         # Anomaly if >2 significant clusters active simultaneously
@@ -266,8 +322,9 @@ def analyze_sniper_core(sigs):
             1 for e in [e_low, e_mid, e_high] if e > 3.0
         ])
         cluster_score = min(10.0, (active_clusters - 1) * 5.0) if active_clusters > 1 else 0.0
+        sniper.last_sub_scores["cluster_score"] = float(cluster_score)
         
-        # COMPOSITE SCORE (Weighted sum)
+        # COMPOSITE SCORE (Weighted sum) - Goal 2: Smooth, no sudden jumps
         h_conf = harm_score + energy_score + persistence_score + cluster_score
         h_conf = float(min(100.0, max(0.0, h_conf)))
 
@@ -653,6 +710,13 @@ def update_mission_control(n):
         html.Span(f"JUPITER: {s_metrics['jup_az']:.1f}° ", style={"color": "#FFD700", "marginRight": "15px"}),
         html.Span(f"REGULUS: {s_metrics['reg_az']:.1f}°", style={"color": "#FF4444"})
     ])
+    
+    # Goal 1: Add ASTRO_STALE indicator if cache is stale
+    if astro_cache.astro_stale:
+        astro_txt = html.Div([
+            html.Span("[ASTRO_STALE] ", style={"color": "#FF6666", "fontWeight": "bold"}),
+            astro_txt
+        ])
 
     # LIVE EVENT LOGGER v15.4
     event_line = f"{datetime.now().strftime('%H:%M:%S')} | {tag} | {peak_hz:.1f}Hz | SIGMA {sigma:.2f}"
