@@ -260,7 +260,7 @@ def analyze_sniper_core(sigs):
         
         # Factor 1: HARMONIC COHERENCE with weighted contribution (Goal 2: Not binary)
         harm_score = 0.0
-        if pow_peak > noise_floor * 1.5:  # Relaxed threshold for Goal 3
+        if pow_peak > adaptive_threshold * 2.0:  # Stronger adaptive threshold to reduce false positives
             p2 = psd[np.argmin(np.abs(fr - peak_hz * 2))]
             p3 = psd[np.argmin(np.abs(fr - peak_hz * 3))]
             harmonic_energy = p2 + p3
@@ -293,7 +293,7 @@ def analyze_sniper_core(sigs):
         cluster_entropy = -((e_low + 1e-9) * np.log(e_low + 1e-9) + 
                            (e_mid + 1e-9) * np.log(e_mid + 1e-9) + 
                            (e_high + 1e-9) * np.log(e_high + 1e-9)) / np.log(3)
-        energy_score = (1.0 - cluster_entropy) * 30.0  # Focused = anomalous
+        energy_score = max(0.0, (1.0 - cluster_entropy - 0.35)) * 20.0  # Focused = anomalous
         sniper.last_sub_scores["energy_score"] = float(energy_score)
         
         # Factor 3: PERSISTENCE ENGINE (0-20 weight)
@@ -306,14 +306,14 @@ def analyze_sniper_core(sigs):
             active_now = "LOW"
 
         if active_now:
-            sniper.persistence[active_now] += 5
+            sniper.persistence[active_now] += 1
             for k in sniper.persistence:
                 if k != active_now: sniper.persistence[k] = 0
         else:
             for k in sniper.persistence: sniper.persistence[k] = 0
 
         # Persistence reward: sustained activity
-        persistence_score = min(20.0, (sniper.persistence[active_now] / 60.0) * 20.0 if active_now else 0.0)
+        persistence_score = min(20.0, (sniper.persistence[active_now] / 120.0) * 20.0 if active_now else 0.0)
         sniper.last_sub_scores["persistence_score"] = float(persistence_score)
         
         # Factor 4: MULTI-CLUSTER ACTIVITY (0-10 weight)
@@ -325,7 +325,15 @@ def analyze_sniper_core(sigs):
         sniper.last_sub_scores["cluster_score"] = float(cluster_score)
         
         # COMPOSITE SCORE (Weighted sum) - Goal 2: Smooth, no sudden jumps
-        h_conf = harm_score + energy_score + persistence_score + cluster_score
+        raw_conf = (
+            harm_score * 0.45 +
+            energy_score * 0.30 +
+            persistence_score * 0.15 +
+            cluster_score * 0.10
+        )
+
+        # Soft saturation curve to prevent overreacting to stacked medium signals
+        h_conf = 100 * (1 - np.exp(-raw_conf / 25))
         h_conf = float(min(100.0, max(0.0, h_conf)))
 
         # Wstępne tagowanie eventów (Negative Case Logging)
