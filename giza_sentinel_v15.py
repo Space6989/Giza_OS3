@@ -41,6 +41,7 @@ LOG_FILE = "giza_sentinel_v15.csv"
 FS = 100
 CRUST_BASE_OFFSET = 15.0
 GRAPH_CONFIG = {"displayModeBar": False}
+SYNC_OFFSET = 900  # T-15min sync anchor (seconds)
 
 STATIONS = [
     {"name": "EGYPT",  "net": "EG", "sta": "HLW",  "lat": 29.8, "lon": 31.3},
@@ -92,10 +93,24 @@ class AstroCache:
 
 astro_cache = AstroCache()
 
-def get_space_metrics():
+def get_space_metrics(target_time=None):
+    """
+    Calculate space metrics (planet positions, gravity load) for a given time.
+    
+    Args:
+        target_time (datetime, optional): Time to calculate metrics for. Defaults to None.
+                                         If None, uses current time - 900s (T-15min sync).
+    
+    Returns:
+        dict: Contains reg_az, ven_az, jup_az, grav_load
+    """
     try:
-        # SYNC T-15min (900s)
-        sync_time = datetime.now(timezone.utc) - timedelta(seconds=900)
+        # SYNC T-15min (900s) - Use target_time if provided, otherwise calculate from now
+        if target_time is None:
+            sync_time = datetime.now(timezone.utc) - timedelta(seconds=SYNC_OFFSET)
+        else:
+            sync_time = target_time
+        
         now = Time(sync_time)
         altaz_frame = AltAz(obstime=now, location=GIZA_LOC)
         
@@ -171,7 +186,7 @@ class GizaSniperStreamer:
         while self.running:
             try:
                 # 15 MINUT BUFORA - to jest klucz do czystych danych bez timeoutów
-                now_stable = datetime.now(timezone.utc) - timedelta(seconds=900)
+                now_stable = datetime.now(timezone.utc) - timedelta(seconds=SYNC_OFFSET)
                 
                 if self.last_end_time is None:
                     # Start: 10s paczka sprzed 15 minut
@@ -424,6 +439,11 @@ app.layout = html.Div(id="main-container", style={
                 "margin": "0", "fontFamily": "Orbitron, monospace",
                 "color": "#FFB302", "fontSize": "20px", "letterSpacing": "2px"
             }),
+            html.Div(id="sync-indicator", style={
+                "color": "#00D4FF", "fontSize": "11px",
+                "fontFamily": "Orbitron, monospace", "marginTop": "3px",
+                "letterSpacing": "1px"
+            }),
             html.Div(id="regulus-hud", style={
                 "color": "#00D4FF", "fontSize": "12px",
                 "fontFamily": "Orbitron, monospace", "marginTop": "5px"
@@ -528,7 +548,7 @@ app.layout = html.Div(id="main-container", style={
      Output("gravity-val", "children"), Output("regulus-hud", "children"),
      Output("cd-aug", "children"), Output("cd-oct", "children"),
      Output("main-container", "style"), Output("log-display", "children"),
-     Output("spectral-bars", "children")],
+     Output("spectral-bars", "children"), Output("sync-indicator", "children")],
     [Input("heartbeat", "n_intervals")]
 )
 def update_mission_control(n):
@@ -553,7 +573,11 @@ def update_mission_control(n):
     e_high = result["e_high"]
     align = calculate_giza_alignment(batch)
     
-    s_metrics = get_space_metrics()
+    # STEP 2: Calculate synchronized time (T-15min offset) for astro metrics
+    sync_time = datetime.now(timezone.utc) - timedelta(seconds=SYNC_OFFSET)
+    
+    # STEP 3: Pass sync_time to get_space_metrics for historical ephemeris calculation
+    s_metrics = get_space_metrics(target_time=sync_time)
     tec = sniper.tec_val
     grav_load = s_metrics['grav_load']
 
@@ -790,13 +814,16 @@ def update_mission_control(n):
         ], style={"display": "flex", "flexDirection": "column", "alignItems": "center"}),
     ], style={"display": "flex", "flexDirection": "row", "gap": "20px", "alignItems": "flex-end"})
     
+    # UI Update: Add SYNC indicator
+    sync_indicator_txt = f"[SYNC: T-15m] {sync_time.strftime('%H:%M:%S UTC')}"
+    
     return (
         f_sigma, f_spec, f_map, g_sigma,
         status_txt, status_color,
         f"{align:.1f}%", f"{h_sync:.1f}%", f"{ent:.2f}",
         f"{tec:.1f} TECU", f"{grav_load:.1f}%", astro_txt,
         cd(DATE_AUG), cd(DATE_OCT),
-        container_style, log_entries, spectral_bars
+        container_style, log_entries, spectral_bars, sync_indicator_txt
     )
 
 
