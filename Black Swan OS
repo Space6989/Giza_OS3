@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import requests
 import json
+import psutil
 from collections import deque
 from datetime import datetime, timezone, timedelta
 from scipy.signal import welch, butter, filtfilt, find_peaks
@@ -95,10 +96,8 @@ class GuardianEnvironmental:
         Return dict or None if unavailable.
         """
         try:
-            import psutil
             cpu_temp = None
             try:
-                import psutil
                 temps = psutil.sensors_temperatures()
                 if 'coretemp' in temps:
                     cpu_temp = temps['coretemp'][0].current
@@ -998,48 +997,37 @@ def update_mission_control(n):
         log_buffer.append(event_line)
     
     log_entries = [
-        html.Div(f"{entry}", style={"margin": "2px 0"})
-        for entry in list(log_buffer)[::-1]
+        html.Div(entry, style={"marginBottom": "2px"})
+        for entry in list(log_buffer)[-8:]
     ]
 
-    # STEP 2 & 3: SPECTRAL BARS COMPONENT - Dynamically generated with persistence values
-    # FIX: Add proper flexbox styling to container for horizontal alignment
-    spectral_bars = html.Div([
-        html.Div(children=[
-            html.Div(style={
-                "width": "25px", "height": f"{min(80, e_low*2.5):.0f}px", "backgroundColor": "#00D4FF",
-                "borderRadius": "2px", "transition": "height 0.3s"
-            }),
-            html.Div(f"{sniper.persistence['LOW']}s", style={"fontSize": "10px", "color": "#00D4FF", "textAlign": "center", "marginTop": "5px"})
-        ], style={"display": "flex", "flexDirection": "column", "alignItems": "center"}),
-        html.Div(children=[
-            html.Div(style={
-                "width": "25px", "height": f"{min(80, e_mid*2.5):.0f}px", "backgroundColor": "#FFB302",
-                "borderRadius": "2px", "transition": "height 0.3s"
-            }),
-            html.Div(f"{sniper.persistence['MID']}s", style={"fontSize": "10px", "color": "#FFB302", "textAlign": "center", "marginTop": "5px"})
-        ], style={"display": "flex", "flexDirection": "column", "alignItems": "center"}),
-        html.Div(children=[
-            html.Div(style={
-                "width": "25px", "height": f"{min(80, e_high*2.5):.0f}px", "backgroundColor": "#FF4444",
-                "borderRadius": "2px", "transition": "height 0.3s"
-            }),
-            html.Div(f"{sniper.persistence['HIGH']}s", style={"fontSize": "10px", "color": "#FF4444", "textAlign": "center", "marginTop": "5px"})
-        ], style={"display": "flex", "flexDirection": "column", "alignItems": "center"}),
-    ], style={"display": "flex", "flexDirection": "row", "gap": "20px", "alignItems": "flex-end"})
-    
-    # UI Update: Add SYNC indicator
-    sync_indicator_txt = f"[SYNC: T-15m] {sync_time.strftime('%H:%M:%S UTC')}"
-    
+    # SPECTRAL EQUALIZER bars
+    bars = [
+        html.Div(style={
+            "width": "40px", "height": f"{max(5, e_low * 3)}px",
+            "background": "#00D4FF", "borderRadius": "3px"
+        }),
+        html.Div(style={
+            "width": "40px", "height": f"{max(5, e_mid * 3)}px",
+            "background": "#FFB302", "borderRadius": "3px"
+        }),
+        html.Div(style={
+            "width": "40px", "height": f"{max(5, e_high * 3)}px",
+            "background": "#FF0000", "borderRadius": "3px"
+        })
+    ]
+
+    sync_text = f"T-15min sync | Cluster: {sniper.persistence} | Raw Score: {sniper.last_sub_scores['harm_score'] + sniper.last_sub_scores['energy_score'] + sniper.last_sub_scores['persistence_score'] + sniper.last_sub_scores['cluster_score']:.1f}"
+
     return (
         f_sigma, f_spec, f_map, g_sigma,
         status_txt, status_color,
-        f"{align:.1f}%", f"{h_sync:.1f}%", f"{ent:.2f}",
-        f"{tec:.1f} TECU", f"{grav_load:.1f}%", astro_txt,
-        cd(DATE_AUG), cd(DATE_OCT),
-        container_style, log_entries, spectral_bars, sync_indicator_txt
+        f"{align:.1f}%", f"{h_conf:.1f}%", f"{ent:.2f}",
+        f"{tec:.1f} TEC", f"{grav_load:.1f}%",
+        astro_txt, cd(DATE_AUG), cd(DATE_OCT),
+        container_style, log_entries, bars, sync_text
     )
 
 
 if __name__ == "__main__":
-    app.run(debug=False, port=8050)
+    app.run_server(debug=False, host="0.0.0.0", port=8050)
