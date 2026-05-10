@@ -51,6 +51,9 @@ STATIONS = [
 rolling_stats = deque(maxlen=17280)
 log_buffer = deque(maxlen=10)
 
+# DEBUG TELEMETRY COUNTER
+debug_counter = 0
+
 # Zmień listę kolumn na tę:
 if not os.path.exists(LOG_FILE):
     cols = ["timestamp", "sigma", "peak_hz", "tec", "alignment", "entropy", "gravity_load", 
@@ -335,6 +338,20 @@ def analyze_sniper_core(sigs):
         # Soft saturation curve to prevent overreacting to stacked medium signals
         h_conf = 100 * (1 - np.exp(-raw_conf / 25))
         h_conf = float(min(100.0, max(0.0, h_conf)))
+        
+        # ===== DEBUG TELEMETRY: Print every ~20 updates =====
+        global debug_counter
+        debug_counter += 1
+        if debug_counter % 20 == 0:
+            print(f"\n[DEBUG TELEMETRY @ {datetime.now().strftime('%H:%M:%S')}]")
+            print(f"  raw_conf (sum of weighted scores): {raw_conf:.4f}")
+            print(f"  harm_score (0-40, weighted 0.45): {harm_score:.4f}")
+            print(f"  energy_score (0-30, weighted 0.30): {energy_score:.4f}")
+            print(f"  persistence_score (0-20, weighted 0.15): {persistence_score:.4f}")
+            print(f"  cluster_score (0-10, weighted 0.10): {cluster_score:.4f}")
+            print(f"  h_conf (final via soft saturation): {h_conf:.4f}")
+            print(f"  --- Cluster state: {active_now} | Persistence count: {sniper.persistence}")
+            print()
 
         # Wstępne tagowanie eventów (Negative Case Logging)
         tag = "BASELINE_STABLE"
