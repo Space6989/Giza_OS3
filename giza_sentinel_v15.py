@@ -288,15 +288,25 @@ def analyze_sniper_core(sigs):
         sniper.last_sub_scores["noise_floor"] = float(noise_floor)
         
         # Factor 2: SPECTRAL ENERGY DISTRIBUTION (0-30 weight)
+        # === FIX: SAFE ENERGY SCORE NORMALIZATION ===
         e_low = np.sum(psd[(fr >= 7) & (fr <= 14)]) / (np.sum(psd) + 1e-9) * 100
         e_mid = np.sum(psd[(fr >= 15) & (fr <= 25)]) / (np.sum(psd) + 1e-9) * 100
         e_high = np.sum(psd[(fr >= 35) & (fr <= 45)]) / (np.sum(psd) + 1e-9) * 100
         
-        # Anomalous = energy concentrated in one band (low entropy within clusters)
+        # Normalize entropy to [0, 1] range using maximum entropy (log(3) for 3 bands)
+        max_entropy = np.log(3.0)  # Maximum entropy for 3 equally distributed bands
         cluster_entropy = -((e_low + 1e-9) * np.log(e_low + 1e-9) + 
                            (e_mid + 1e-9) * np.log(e_mid + 1e-9) + 
-                           (e_high + 1e-9) * np.log(e_high + 1e-9)) / np.log(3)
-        energy_score = max(0.0, (1.0 - cluster_entropy - 0.35)) * 20.0  # Focused = anomalous
+                           (e_high + 1e-9) * np.log(e_high + 1e-9)) / max_entropy
+        
+        # Clamp entropy to [0, 1] to prevent explosion
+        cluster_entropy = np.clip(cluster_entropy, 0.0, 1.0)
+        
+        # Energy score: focused (low entropy) = higher score
+        # Safe formula: (1 - normalized_entropy) * max_weight, then clamp
+        raw_energy_score = (1.0 - cluster_entropy) * 30.0
+        energy_score = np.clip(raw_energy_score, 0.0, 30.0)
+        
         sniper.last_sub_scores["energy_score"] = float(energy_score)
         
         # Factor 3: PERSISTENCE ENGINE (0-20 weight)
